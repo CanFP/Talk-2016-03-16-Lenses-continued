@@ -1,0 +1,196 @@
+% Lenses
+% Alex Mason
+% March 2016
+
+# A Refresher
+## What are lenses
+
+Lenses allow us to focus in on values within a larger, nested structure.
+
+Focus means, roughly, `get`, `set` and `modify`.
+
+They were born out of the pain of dealing with records in Haskell (more on this later).
+
+## Last month's definition
+
+```haskell
+data Lens a b
+  = Lens
+    { get :: a -> b
+    , set :: b -> a -> a
+    }
+
+
+_1 :: Lens (a,b) a
+_1 = Lens (\(x,_) -> x)
+          (\x' (_,y) -> (x',y))
+
+_2 :: Lens (a,b) b
+_2 = Lens (\(_,y) -> y)
+          (\y' (x,_) -> (x,y'))
+```
+
+## Functions on lenses
+
+```haskell
+-- Lens composition
+(>-) :: Lens a b -> Lens b c -> Lens a c
+l >- r = Lens (get r . get l)
+              -- new :: c
+              -- whole :: a
+              (\new whole ->
+               let inner  = get l whole     -- :: b
+                   inner' = set r new inner -- :: b
+               in set l inner' whole)
+
+-- A lens focusing on the b in a ((a,b),c)
+_1 >- _2 :: Lens ((a,b),c) b
+
+-- Apply a function which modifys `b`s in an `a` focused by a lens
+over :: Lens a b -> (b -> b) -> a -> a
+over l a = set l (f (get l a))
+```
+
+# Concrete example
+
+## Personal Info
+
+```haskell
+data Person = Person
+  { _firstname :: String
+  , _lastname  :: String
+  , _initials  :: String
+  , _phNums    :: [PNumber]
+  , _addresses :: [Address]}
+
+data PNumber = PNumber
+  { _name   :: String
+  , _type   :: String -- Home, Work, Modile, Fax, etc.
+  , _digits :: [Int]
+  }
+
+data Address = Address
+  { _purpose  :: String     -- Home, Work, Delivery, etc.
+  , _unit     :: Maybe Int
+  , _streetNo :: Int
+  , _street   :: String
+  , _suburb   :: String
+  , _state    :: String
+  , _postCode :: Int
+  }
+```
+
+<div style="font-size: 50%">
+*Some of the choices of data type above are dubious see*
+
+*[Falsehoods programmers believe about addresses](https://www.mjt.me.uk/posts/falsehoods-programmers-believe-about-addresses/)*
+
+*[Falsehoods programmers believe about names](http://www.kalzumeus.com/2010/06/17/falsehoods-programmers-believe-about-names/)*
+</div>
+
+## Person Lenses
+
+```haskell
+firstname, lastname, initials :: Lens Person String
+firstname = Lens _firstname -- The getter for the _firstname field
+                 (\name' person -> person{_firstname = name'})
+                 --                      ^^^ Record update syntax
+                 --                 The returned value is `person`
+                 --                 with all fields not mentioned copied.
+lastname = ...
+
+phNums :: Lens Person [PNumber]
+phNums = Lens _phNums 
+              (\nums' person -> person{_phNums = nums'})
+
+
+
+```
+
+# What more could we want?
+
+## Lots
+
+Polymorphic update
+:   We know we can apply a function to the focus, but only `b -> b`. What if we want:
+
+    ~~~~~~{.haskell}
+    f :: Int -> String
+
+    x :: (Int,Bool)
+    x = (7,True)
+
+    y :: (String,Bool)
+    y = over f _1 x -- Nope, can't do that
+    ~~~~~~~
+  
+Focus on multiple values
+:   If we have a `(a,a)`, we might want a lens `Lens (a,a) a` which gives us access to **both** `a`'s or:
+
+    ~~~~~~~~{.haskell}
+    -- A lens giving us access to all Strings in an address
+    addressStrings :: Lens Address String
+    ...
+
+    personStrings :: Lens Person String
+    ...
+    ~~~~~~~~
+
+## Even more...
+
+- Partiality
+  :   How do we deal with types like `Either`
+      ```haskell
+      data Either a b = Left a | Right b
+  
+      _Left :: Lens (Either a b) a
+      _Left = Lens (\e -> case e of
+                      Left a -> a
+                      Right b -> error "Left Expected")
+                    ... -- setter even harder
+      ```
+
+# Some experiments
+
+## A small refactor
+
+
+```haskell
+data Lens a b
+  = Lens
+    { get :: a -> b
+    , set :: b -> a -> a
+    }
+-- Becomes this, which is isomorphic
+data Lens a b
+  = Lens
+    { get :: a -> b
+    , set :: a -> b -> a -- Arguments flipped
+    }
+```
+
+## Some common refactoring
+
+```haskell
+data Lens a b
+  = Lens
+    { get :: a -> b
+    , set :: a -> b -> a -- Arguments flipped
+    }
+-- Becomes this, also isomorphic
+data Lens a b
+  = Lens
+    { getSet :: a -> (b,b -> a)
+    }
+get :: Lens a b -> a -> b
+get (Lens f) a = fst (f a)
+
+set :: Lens a b -> b -> a -> a
+set (Lens f) new a = snd (f a) new
+```
+
+# More
+
+## Sub Slide
+
+some content
