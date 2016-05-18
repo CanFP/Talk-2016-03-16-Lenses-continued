@@ -63,7 +63,7 @@ data Person = Person
 
 data PNumber = PNumber
   { _name   :: String
-  , _type   :: String -- Home, Work, Modile, Fax, etc.
+  , _type   :: String -- Home, Work, Mobile, Fax, etc.
   , _digits :: [Int]
   }
 
@@ -539,6 +539,359 @@ modify (_2._2.firstname) (map toUpper) -- ... the same with with an all uppercas
 
 ---------------
 
+# Real world examples
+
+## Wreq
+
+```haskell
+get :: String -> IO (Response ByteString)
+r <- get "http://myservice.io/address"
+```
+
+## Aeson
+
+Aeson is the go-to JSON library in Haskell.
+
+```haskell
+data Value = Object !Object
+           | Array !Array
+           | String !Text
+           | Number !Scientific
+           | Bool !Bool
+           | Null
+type Object = HashMap Text Value
+type Array = Vector Value
+```
+
+## <span style="text-transform: none">ToJSON & FromJSON</span>
+
+```haskell
+data Address = Address { _purpose  :: String
+  , _unit     :: Maybe Int, _streetNo :: Int
+  , _street   :: String   , _suburb   :: String
+  , _state    :: String   , _postCode :: Int }
+
+instance ToJSON Address where
+  toJSON Address{..} = object ["purpose" .= _purpose
+    ,"unit"    .= _unit   ,"streetNo" .= _streetNo
+    ,"street"  .= _street ,"suburb"   .= _suburb
+    ,"state"   .= _state  ,"postcode" .= _postcode ]
+
+instance FromJSON Address where
+  parseJSON = withObject "Address" $ \o -> Address
+      <$> o .: "purpose"<*> o .: "unit"   <*> o .: "streetNo"
+      <*> o .: "street" <*> o .: "suburb" <*> o .: "state"
+      <*> o .: "postcode"
+```
+
+## Encoding
+
+```haskell
+encode :: ToJSON a => a -> ByteString
+
+encode (Address "Home" Nothing 7 "London Circuit" "City" "ACT" 2601)
+```
+becomes
+```json
+{
+  "purpose": "Home",
+  "unit": null,
+  "street": "London Circuit",
+  "suburb": "City",
+  "state" : "ACT",
+  "postcode": 2601
+}
+```
+ 
+## Aeson-Lens
+
+A wrapper around Aeson which gives lenses for interacting with Aeson `Value`
+
+
+# Practical lenses
+
+## More than lens
+
+```haskell
+Iso a b  -- a bidirectional transformation between a and b,
+         -- An isomorphism
+
+Getter a b -- Can extract a b from an a, but not set
+Setter a b -- Can set but not get
+
+Lens a b -- focuses on a b inside an a
+
+Prism a b -- Might point to a b inside an a
+          -- Used for sum types
+
+Travsersal a b -- Multifocus on 0 or more b's in an a
+               -- Consider Traversal [a] a
+```
+
+## Iso
+
+Isos allow for bidirectional transformation between two types
+
+```haskell
+-- Convert between a [Char] and Text
+packed :: Iso String Text
+
+-- We can flip the order because it's bidirectional
+from :: Iso a b -> Iso b a
+
+from packed :: Iso Text String
+
+-- Has this law on some Iso `l`
+from (from l) ≡ l
+
+-- If the value doesn't exist we can use the default value
+-- handy for maps where you want to assume there
+-- is definitely a value
+non :: a -> Iso (Maybe a) a
+```
+
+## Getter
+
+Getters are often used when you have a function `a -> b` that you want to compose with other lenslike things
+```haskell
+to :: (a -> b) -> Getter a b
+
+(^.) :: a -> Getter a b -> b
+-- Lens is pretty operator heavey...
+
+("hello","world") ^. to snd
+==> "world"
+
+("hello","world") ^. to snd . to (map toUpper)
+==> "WORLD"
+```
+
+## Getter
+
+Can be used in `Reader s` or `State s` using `view :: MonadReader s m => Getter s a -> m a`
+
+```haskell
+myReaderThing :: Reader (Int,Bool) String
+myReaderThing = do
+  int <- view $ to fst
+  bool <- view $ to snd
+  return (show int ++ show bool)
+
+runReader myReaderThing (7,False)
+==> "7False"
+```
+
+## Setter
+
+As you'd expect, used to set values, this can mean more than one value
+
+```haskell
+_2 :: Setter (a,b) b
+
+set :: Setter a b -> b -> a -> a
+-- a.k.a
+(.~) :: Setter a b -> b -> a -> a
+
+(1,"hello") & _2 .~ "world"
+==> (1,"world")
+
+-- We can also apply a function to all the focii of a Setter
+both :: Setter (a,a) a
+
+(1,2) & both %~ (+100)
+==> (101,102)
+
+-- There's also some imperativly familliar functions
+(1,2) & _2 *~ 30
+==> (1,60)
+```
+
+## Setter
+
+We can use setters inside `State` too
+
+```haskell
+assign :: MonadState s m => Setter a b -> b -> m ()
+-- a.k.a
+(.=) :: Setter a b -> b -> m ()
+
+_1 :: Setter (a,b) a
+_2 :: Setter (a,b) b
+
+myStatefulThing :: State (Int,Bool) String
+myStatefulThing = do
+  _1 .= 7
+  _2 .= True
+  (int,bool) <- get
+  return (show int ++ show bool)
+
+runState myStatefulThing (0,False)
+==> "7True"
+```
+
+## Lens
+
+Points to a `b` inside an `a`, has several laws, for some lens `l`:
+
+```haskell
+set  :: Lens a b -> b -> a -> a
+view :: Lens a b      -> a -> b
+
+-- 1) You get back what you put in
+view l (set l v s)  ≡ v
+-- 2) Putting back what you got doesn't change anything
+set l (view l s) s  ≡ s
+-- 3) Setting twice is the same as setting once
+set l v' (set l v s) ≡ set l v' s
+
+-- Look familliar?
+lens :: (a -> b)      -- getter
+     -> (a -> b -> a) -- setter
+     -> Lens a b      
+```
+
+## Lens
+
+```haskell
+data Tagged a = Tagged {_tag :: String, _val :: a}
+
+tag :: Lens (Tagged a) String
+val :: Lens (Tagged a) a
+
+-- Lenses are Setters and Getters
+myTagged = Tagged "My Tag" True
+
+myTagged ^. tag
+==> "My Tag"
+myTag & val .~ False
+==> Tagged "My Tag" False
+-- We can apply functions
+myTagged & tag %~ map toUpper
+==> Tagged "MY TAG" True
+```
+
+## Traversal
+Things start getting more useful than OOP. Haskell's `Traversable` has the following functions
+```haskell
+traverse :: (Traversable t, Applicative f)
+         => (a -> f b) -> t a -> f (t b)
+-- When applied to lists, it's mapM
+traverse :: (Traversable t, Applicative f)
+         => (a -> f b) -> [a] -> f [b]
+-- On Maybe, it's 'run this action if there's an `a`'
+traverse :: (Traversable t, Applicative f)
+         => (a -> f b) -> Maybe a -> f (Maybe b)
+
+traverse print [1,2,3]
+==> "1"
+==> "2"
+==> "3"
+[(),(),()]
+
+traverse print (Just 4)
+==> "4"
+Just ()
+
+```
+
+## Traversal
+
+A traversal is similar, but doesn't need to be applied to something of kind `* -> *`
+
+```haskell
+-- Focuses on every String in an address
+-- first and last name, street etc.
+addressStrings :: Traversal Address String
+
+-- Lets you focus on all values in a Map
+values :: Traversal (Map k v) v
+
+```
+
+## Traversal
+
+Used for zero or more a's, can be used to extract all a's, or the first
+
+``` haskell
+listOf :: Traversal a b -> a -> [b]
+-- Also known as:
+(^..) :: a -> Traversal a b -> [b]
+
+preview :: Traversal a b -> a -> Maybe b
+-- a.k.a
+(^?) :: a -> Traversal a b -> Maybe b
+
+someAddress ^.. addressStrings
+==> ["John","Doe","7 London circuit","Australia",...]
+
+someAddress ^? addressStrings
+==> Just "John"
+```
+
+## Prism
+
+Prisms are most commonly used with sum types, represent partial transformations, is a traversal focusing on at most one element
+
+```haskell
+_Left :: Prism (Either e a) e
+_Just :: Prism (Maybe a)    a
+```
+But not always
+```haskell
+-- Fails if the integer is negative
+nat :: Prism Integer Natural
+
+-- Returns an `a` if it can be parsed from the String
+_Show :: Read a => Prism String a 
+      -- Yes that is its name ¯\_(ツ)_/¯
+          -- It's actually consistent but unintuitive
+```
+
+## Prism
+
+What separates a prism from a traversal is it can be used like a constructor
+```haskell
+
+re :: Prism a b -> Getter b a
+
+-- Remember that (^.) runs a Getter on an a to get a b
+5 ^. re _Left
+==> Left 5
+
+5 ^. re _Show
+==> "5"
+
+-- Getting a bit more tricky, we can compose these...
+5 ^. re (_Show._Left)
+==> "Left 5"
+```
+
+## Composition
+
+This seems like a lot of concepts, but what is nice is that they all compose
+
+Composition is just normal function composition, but because of the Van Laarhoven construction, it looks backwards
+
+```haskell
+someLens :: Lens a b
+someSetter :: Setter b c
+someLens . someSetter :: Setter a c
+```
+Any `Lens` is both a valid getter and setter, as you'd expect - it points to exactly one value which will always exist inside the larger value
+
+## Composition
+
+Composition will give the most constrained type of all the composed elements
+
+A `Traversal` is more powerful than a Getter, so composing a Traversal and a Getter gives a Getter
+
+
+
+
+
+# References
+
 ## References
 
 * [Lenses from the ground up](https://speakerdeck.com/markhibberd/lens-from-the-ground-up) Mark Hibberd
+* [Polymorphic Update with van Laarhoven Lenses](http://r6.ca/blog/20120623T104901Z.html)
